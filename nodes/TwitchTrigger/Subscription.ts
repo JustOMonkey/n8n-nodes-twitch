@@ -78,9 +78,24 @@ export class Subscription {
 				nodeType: 'n8n-nodes-twitch.twitchTrigger',
 			});
 
+			if (/subscription already exists/i.test(errorMessage)) {
+				throw new NodeOperationError(
+					this.trigger.getNode(),
+					`Another "${this.event}" trigger with the exact same settings (same channel/user/reward, etc.) is already active for this credential — Twitch does not allow two identical EventSub subscriptions.`,
+					{
+						description:
+							'Either remove the duplicate Twitch Trigger node, or change one of its settings (e.g. a different broadcaster, reward, or other condition field) so the two subscriptions are no longer identical.',
+					},
+				);
+			}
+
 			throw new NodeOperationError(
 				this.trigger.getNode(),
-				`Failed to create Twitch EventSub subscription: ${errorMessage}`,
+				`Failed to create Twitch EventSub subscription for event "${this.event}": ${errorMessage}`,
+				{
+					description:
+						'Check that the credential is valid, has the required scopes for this event, and that you have not exceeded Twitch API rate limits.',
+				},
 			);
 		}
 	}
