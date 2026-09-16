@@ -1,9 +1,9 @@
 {
 	"name": "@justonemonkey/n8n-nodes-twitch",
-	"version": "0.1.0",
-	"description": "",
+	"version": "1.0.1",
+	"description": "n8n community node for the Twitch API and EventSub, with shared WebSocket support for multiple triggers",
 	"license": "MIT",
-	"homepage": "",
+	"homepage": "https://github.com/JustOMonkey/n8n-nodes-twitch",
 	"keywords": [
 		"n8n-community-node-package"
 	],
@@ -27,11 +27,14 @@
 	"files": [
 		"dist"
 	],
+	"publishConfig": {
+		"access": "public"
+	},
 	"n8n": {
 		"n8nNodesApiVersion": 1,
 		"strict": true,
 		"credentials": [
-			"dist/credentials/TwitchUserOAuth2Api.credentials.ts"
+			"dist/credentials/TwitchUserOAuth2Api.credentials.js"
 		],
 		"nodes": [
 			"dist/nodes/Twitch/Twitch.node.js",
