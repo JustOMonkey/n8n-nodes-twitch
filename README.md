@@ -14,7 +14,14 @@ n8n is a [fair-code licensed](https://docs.n8n.io/reference/license/) workflow a
 
 ## Installation
 
-Follow the n8n [community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) to install this node in your n8n instance.
+### Install from n8n (Recommended)
+
+1. Go to **Settings** > **Community Nodes**
+2. Click **Install**
+3. Enter `@justonemonkey/n8n-nodes-twitch` in the package name field
+4. Click **Install**
+
+For other installation methods, follow the n8n [community nodes installation guide](https://docs.n8n.io/integrations/community-nodes/installation/).
 
 ## Nodes
 
