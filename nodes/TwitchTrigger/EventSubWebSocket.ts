@@ -1,0 +1,168 @@
+import { ApplicationError, LoggerProxy, sleep, type IDataObject } from 'n8n-workflow';
+
+type SessionHandler = (sessionId: string) => Promise<void>;
+type NotificationHandler = (data: IDataObject, subscriptionId: string) => void;
+type RevocationHandler = (subscriptionId: string) => void;
+type DisconnectHandler = () => void;
+
+// Extra margin added to keepalive timeout to account for network latency
+const KEEPALIVE_MARGIN_MS = 2000;
+
+export class EventSubWebSocket {
+	private ws: WebSocket | null = null;
+	private reconnectUrl: string | null = null;
+	private isClosing = false;
+	private settled = false;
+	private keepaliveEpoch = 0;
+	private keepaliveTimeoutMs = 0;
+	constructor(
+		private readonly onSessionWelcome: SessionHandler,
+		private readonly onNotification: NotificationHandler,
+		private readonly onRevocation: RevocationHandler,
+		private readonly workflowId: string,
+		private readonly onDisconnect?: DisconnectHandler,
+	) {}
+
+	async connect(url: string = 'wss://eventsub.wss.twitch.tv/ws'): Promise<void> {
+		return new Promise((resolve, reject) => {
+			try {
+				this.ws = new WebSocket(url);
+
+				this.ws.onopen = () => {
+					// Connection opened, wait for session_welcome
+				};
+
+				this.ws.onmessage = async (event: MessageEvent) => {
+					try {
+						// Any message resets the keepalive timer
+						this.resetKeepaliveTimer();
+
+						const message = JSON.parse(event.data as string) as IDataObject;
+						const metadata = message.metadata as IDataObject;
+						const messageType = metadata.message_type as string;
+
+						if (messageType === 'session_welcome') {
+							const session = message.payload as IDataObject;
+							const welcomeSession = session.session as IDataObject;
+							const sessionId = welcomeSession.id as string;
+
+							const keepaliveTimeoutSeconds =
+								(welcomeSession.keepalive_timeout_seconds as number) || 10;
+							this.keepaliveTimeoutMs =
+								keepaliveTimeoutSeconds * 1000 + KEEPALIVE_MARGIN_MS;
+
+							await this.onSessionWelcome(sessionId);
+							this.settled = true;
+							resolve();
+						} else if (messageType === 'notification') {
+							const payload = message.payload as IDataObject;
+							const eventData = (payload.event as IDataObject) || {};
+							const subscription = payload.subscription as IDataObject;
+							this.onNotification(eventData, subscription.id as string);
+						} else if (messageType === 'session_keepalive') {
+							// Keepalive timer already reset above
+						} else if (messageType === 'session_reconnect') {
+							const payload = message.payload as IDataObject;
+							const reconnectSession = payload.session as IDataObject;
+							this.reconnectUrl = reconnectSession.reconnect_url as string;
+
+							if (this.ws && !this.isClosing) {
+								this.ws.close();
+							}
+						} else if (messageType === 'revocation') {
+							const payload = message.payload as IDataObject;
+							const subscription = payload.subscription as IDataObject;
+							this.onRevocation(subscription.id as string);
+						}
+					} catch (error) {
+						LoggerProxy.debug('Failed to parse WebSocket message from Twitch EventSub', {
+							error: error instanceof Error ? error.message : String(error),
+							rawMessage: event.data as string,
+							workflowId: this.workflowId,
+							nodeType: 'n8n-nodes-twitch.twitchTrigger',
+						});
+						// If the promise hasn't settled yet, reject with the real error
+						// so subscription creation failures are properly surfaced.
+						reject(error);
+					}
+				};
+
+				this.ws.onerror = () => {
+					reject(new ApplicationError('WebSocket error occurred'));
+				};
+
+				this.ws.onclose = async () => {
+					this.stopKeepaliveTimer();
+
+					if (this.isClosing) {
+						return;
+					}
+
+					if (this.reconnectUrl) {
+						const nextUrl = this.reconnectUrl;
+						this.reconnectUrl = null;
+						try {
+							await this.connect(nextUrl);
+							if (!this.settled) {
+								this.settled = true;
+								resolve();
+							}
+						} catch (error) {
+							reject(error);
+						}
+					} else if (this.settled) {
+						// Post-activation disconnection — notify the owner for reconnection
+						if (this.onDisconnect) {
+							this.onDisconnect();
+						}
+					} else {
+						reject(
+							new ApplicationError(
+								'WebSocket connection closed unexpectedly. Workflow will be restarted.',
+							),
+						);
+					}
+				};
+			} catch (error) {
+				reject(error);
+			}
+		});
+	}
+
+	close() {
+		this.isClosing = true;
+		this.stopKeepaliveTimer();
+		if (this.ws) {
+			this.ws.close();
+			this.ws = null;
+		}
+	}
+
+	/**
+	 * Reset the keepalive timer. Each call invalidates the previous timer
+	 * by incrementing the epoch counter, so only the latest timer fires.
+	 */
+	private resetKeepaliveTimer(): void {
+		if (this.keepaliveTimeoutMs <= 0) {
+			return;
+		}
+		const epoch = ++this.keepaliveEpoch;
+		void sleep(this.keepaliveTimeoutMs).then(() => {
+			if (epoch !== this.keepaliveEpoch || this.isClosing) {
+				return;
+			}
+			LoggerProxy.warn('Twitch EventSub WebSocket keepalive timeout, closing connection', {
+				workflowId: this.workflowId,
+				nodeType: 'n8n-nodes-twitch.twitchTrigger',
+				timeoutMs: this.keepaliveTimeoutMs,
+			});
+			if (this.ws) {
+				this.ws.close();
+			}
+		});
+	}
+
+	private stopKeepaliveTimer(): void {
+		this.keepaliveEpoch++;
+	}
+}
