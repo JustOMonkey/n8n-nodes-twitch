@@ -19,6 +19,15 @@ const EVENT_VERSIONS: Record<string, string> = {
 	'channel.guest_star_settings.update': 'beta',
 };
 
+function isEqual(a: IDataObject, b: IDataObject): boolean {
+	const aKeys = Object.keys(a ?? {}).sort();
+	const bKeys = Object.keys(b ?? {}).sort();
+	if (aKeys.length !== bKeys.length || aKeys.some((key, i) => key !== bKeys[i])) {
+		return false;
+	}
+	return aKeys.every((key) => a[key] === b[key]);
+}
+
 export class Subscription {
 	constructor(
 		private readonly trigger: ITriggerFunctions,
@@ -33,6 +42,8 @@ export class Subscription {
 		}
 
 		const condition = await buildCondition(this.trigger, this.event);
+
+		await this.deleteStaleDuplicates(condition);
 
 		const requestBody = {
 			type: this.event,
@@ -98,6 +109,57 @@ export class Subscription {
 				},
 			);
 		}
+	}
+
+	/**
+	 * Twitch rejects a create() call if a subscription with the exact same
+	 * type + condition already exists, even if it is orphaned (e.g. left
+	 * over from a previous activation whose delete() failed, or from n8n
+	 * restarting without deactivating the workflow first). Since we are
+	 * about to create a fresh subscription with this exact condition, any
+	 * existing one is redundant — delete it first so create() can succeed.
+	 */
+	private async deleteStaleDuplicates(condition: IDataObject): Promise<void> {
+		let cursor: string | undefined;
+
+		do {
+			let response: IDataObject;
+			try {
+				response = (await this.trigger.helpers.httpRequestWithAuthentication.call(
+					this.trigger,
+					'twitchUserOAuth2Api',
+					{
+						method: 'GET',
+						url: 'https://api.twitch.tv/helix/eventsub/subscriptions',
+						headers: {
+							'Client-ID': this.clientId,
+						},
+						qs: {
+							type: this.event,
+							...(cursor ? { after: cursor } : {}),
+						},
+						json: true,
+					},
+				)) as IDataObject;
+			} catch (error) {
+				LoggerProxy.warn('Failed to list existing Twitch EventSub subscriptions', {
+					error: error instanceof Error ? error.message : String(error),
+					event: this.event,
+				});
+				return;
+			}
+
+			const subscriptions = (response.data as IDataObject[]) ?? [];
+			const duplicates = subscriptions.filter((sub) =>
+				isEqual(sub.condition as IDataObject, condition),
+			);
+
+			for (const duplicate of duplicates) {
+				await this.delete(duplicate.id as string);
+			}
+
+			cursor = (response.pagination as IDataObject | undefined)?.cursor as string | undefined;
+		} while (cursor);
 	}
 
 	async delete(subscriptionId: string): Promise<void> {

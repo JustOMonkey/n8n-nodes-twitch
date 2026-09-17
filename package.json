@@ -1,6 +1,6 @@
 {
 	"name": "@justonemonkey/n8n-nodes-twitch",
-	"version": "1.0.6",
+	"version": "1.0.7",
 	"description": "n8n community node for the Twitch API and EventSub, with shared WebSocket support for multiple triggers",
 	"license": "MIT",
 	"homepage": "https://github.com/JustOMonkey/n8n-nodes-twitch",
